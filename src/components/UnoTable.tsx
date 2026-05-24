@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { api } from '@/lib/api';
+import Icon from '@/components/ui/icon';
 
 interface Card {
   color: 'red' | 'blue' | 'green' | 'yellow' | 'wild';
@@ -12,29 +13,30 @@ interface RoomPlayer {
   avatar: string;
   card_count: number;
   seat: number;
+  online: boolean;
 }
 
 interface RoomState {
   id: number;
-  code: string;
   status: string;
   direction: string;
   current_turn: number;
   discard_top: Card | null;
-  host: string;
   players: RoomPlayer[];
+  online_count: number;
+  turn_elapsed: number;
+  turn_timeout: number;
 }
 
 interface UnoTableProps {
-  roomCode: string;
   roomId: number;
   userId: number;
   username: string;
   avatar: string;
-  isHost: boolean;
+  onLogout: () => void;
 }
 
-export default function UnoTable({ roomCode, roomId, userId, isHost }: UnoTableProps) {
+export default function UnoTable({ roomId, userId, onLogout }: UnoTableProps) {
   const [room, setRoom] = useState<RoomState | null>(null);
   const [hand, setHand] = useState<Card[]>([]);
   const [selectedCard, setSelectedCard] = useState<number | null>(null);
@@ -44,13 +46,13 @@ export default function UnoTable({ roomCode, roomId, userId, isHost }: UnoTableP
   const loadState = useCallback(async () => {
     try {
       const [state, handData] = await Promise.all([
-        api.room.state(roomCode),
+        api.room.state(),
         api.game.hand(roomId),
       ]);
       setRoom(state);
       setHand(handData.hand || []);
-    } catch (_e) { /* silent poll */ }
-  }, [roomCode, roomId]);
+    } catch (_e) { /* silent */ }
+  }, [roomId]);
 
   useEffect(() => {
     loadState();
@@ -60,6 +62,7 @@ export default function UnoTable({ roomCode, roomId, userId, isHost }: UnoTableP
 
   async function startGame() {
     setLoading(true);
+    setError('');
     try {
       await api.room.start(roomId);
       await loadState();
@@ -105,6 +108,8 @@ export default function UnoTable({ roomCode, roomId, userId, isHost }: UnoTableP
 
   const isMyTurn = room?.current_turn === userId && room?.status === 'playing';
   const top = room?.discard_top;
+  const timeLeft = room ? Math.max(0, room.turn_timeout - room.turn_elapsed) : 0;
+  const timerDanger = timeLeft <= 3 && timeLeft > 0 && isMyTurn;
 
   if (!room) {
     return (
@@ -120,28 +125,47 @@ export default function UnoTable({ roomCode, roomId, userId, isHost }: UnoTableP
       <div className="flex items-center justify-between px-4 py-2" style={{ borderBottom: '1px solid var(--uno-border)' }}>
         <div className="flex items-center gap-2">
           <span className="font-black text-lg tracking-wider" style={{ color: 'var(--uno-accent)' }}>UNO</span>
-          <span className="text-xs px-2 py-0.5 rounded-full font-mono font-bold" style={{ background: 'var(--uno-surface2)', color: 'var(--uno-accent)', border: '1px solid var(--uno-border)' }}>
-            #{roomCode}
-          </span>
           <span className="text-xs px-2 py-0.5 rounded-full" style={{ background: 'var(--uno-surface2)', color: 'var(--uno-muted)' }}>
-            {room.direction === 'cw' ? '↻' : '↺'} {room.players.length} игр.
+            {room.direction === 'cw' ? '↻' : '↺'}
+          </span>
+          {/* Online count */}
+          <span className="flex items-center gap-1 text-xs px-2 py-0.5 rounded-full"
+            style={{ background: 'rgba(39,174,96,0.12)', border: '1px solid rgba(39,174,96,0.3)', color: '#27ae60' }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#27ae60', display: 'inline-block' }} />
+            {room.online_count} онлайн
           </span>
         </div>
+
         <div className="flex items-center gap-2">
-          {room.players.map(p => (
+          {/* Players */}
+          {room.players.filter(p => p.online).map(p => (
             <div key={p.id} className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-sm"
               style={{
                 background: 'var(--uno-surface2)',
-                border: `1.5px solid ${room.current_turn === p.id && room.status === 'playing' ? 'var(--uno-accent)' : p.card_count <= 2 ? 'var(--uno-red)' : 'transparent'}`
+                border: `1.5px solid ${
+                  room.current_turn === p.id && room.status === 'playing'
+                    ? 'var(--uno-accent)'
+                    : p.card_count <= 2 && room.status === 'playing'
+                    ? 'var(--uno-red)'
+                    : 'transparent'
+                }`
               }}>
               <span>{p.avatar}</span>
               <span className="font-medium" style={{ color: 'var(--uno-text)' }}>{p.username}</span>
-              <span className="font-black text-xs px-1.5 py-0.5 rounded-full"
-                style={{ background: p.card_count <= 2 ? 'var(--uno-red)' : 'var(--uno-border)', color: 'white' }}>
-                {p.card_count}
-              </span>
+              {room.status === 'playing' && (
+                <span className="font-black text-xs px-1.5 py-0.5 rounded-full"
+                  style={{ background: p.card_count <= 2 ? 'var(--uno-red)' : 'var(--uno-border)', color: 'white' }}>
+                  {p.card_count}
+                </span>
+              )}
             </div>
           ))}
+
+          <button onClick={onLogout} title="Выйти"
+            className="flex items-center gap-1 px-2 py-1 rounded-lg text-xs"
+            style={{ background: 'var(--uno-surface2)', color: 'var(--uno-muted)', border: '1px solid var(--uno-border)', cursor: 'pointer' }}>
+            <Icon name="LogOut" size={12} />
+          </button>
         </div>
       </div>
 
@@ -154,37 +178,37 @@ export default function UnoTable({ roomCode, roomId, userId, isHost }: UnoTableP
               Ожидание игроков...
             </div>
             <div className="text-sm mb-4" style={{ color: 'var(--uno-muted)' }}>
-              Поделись кодом: <span className="font-black" style={{ color: 'var(--uno-accent)' }}>{roomCode}</span>
+              Онлайн: <span style={{ color: 'var(--uno-accent)', fontWeight: 700 }}>{room.online_count}</span> игрок(ов)
             </div>
-            {isHost && room.players.length >= 2 && (
+            {room.online_count >= 2 ? (
               <button onClick={startGame} disabled={loading}
                 className="px-6 py-3 rounded-xl font-bold text-base"
-                style={{ background: 'var(--uno-accent)', color: 'var(--uno-dark)', border: 'none', cursor: 'pointer' }}>
+                style={{ background: 'var(--uno-accent)', color: 'var(--uno-dark)', border: 'none', cursor: loading ? 'not-allowed' : 'pointer' }}>
                 {loading ? '...' : '▶ Начать игру'}
               </button>
-            )}
-            {isHost && room.players.length < 2 && (
+            ) : (
               <div className="text-sm" style={{ color: 'var(--uno-muted)' }}>
-                Нужно минимум 2 игрока
-              </div>
-            )}
-            {!isHost && (
-              <div className="text-sm" style={{ color: 'var(--uno-muted)' }}>
-                Хост начнёт игру
+                Нужно ещё {2 - room.online_count} игрок(ов)
               </div>
             )}
           </div>
         ) : room.status === 'finished' ? (
           <div className="text-center">
             <div className="text-5xl mb-3">🎉</div>
-            <div className="font-black text-2xl" style={{ color: 'var(--uno-accent)' }}>Игра завершена!</div>
+            <div className="font-black text-2xl mb-4" style={{ color: 'var(--uno-accent)' }}>Игра завершена!</div>
+            {room.online_count >= 2 && (
+              <button onClick={startGame} disabled={loading}
+                className="px-6 py-3 rounded-xl font-bold"
+                style={{ background: 'var(--uno-accent)', color: 'var(--uno-dark)', border: 'none', cursor: 'pointer' }}>
+                {loading ? '...' : '🔄 Новая игра'}
+              </button>
+            )}
           </div>
         ) : (
           <>
             {/* Draw pile */}
             <div className="flex flex-col items-center gap-2">
-              <div onClick={drawCard}
-                className="uno-card"
+              <div onClick={drawCard} className="uno-card"
                 style={{
                   background: 'linear-gradient(135deg, #1e2233, #252a3a)',
                   border: '2px solid var(--uno-border)',
@@ -208,7 +232,7 @@ export default function UnoTable({ roomCode, roomId, userId, isHost }: UnoTableP
               </div>
             )}
 
-            {/* Turn indicator */}
+            {/* Turn + Timer */}
             <div className="flex flex-col items-center gap-2">
               <div className={`w-14 h-14 rounded-full flex items-center justify-center text-2xl ${isMyTurn ? 'pulse-turn' : ''}`}
                 style={{
@@ -220,12 +244,28 @@ export default function UnoTable({ roomCode, roomId, userId, isHost }: UnoTableP
               <span className="text-xs font-medium" style={{ color: isMyTurn ? 'var(--uno-accent)' : 'var(--uno-muted)' }}>
                 {isMyTurn ? 'Твой ход!' : `Ход: ${room.players.find(p => p.id === room.current_turn)?.username || '?'}`}
               </span>
+              {/* Timer bar */}
+              {room.status === 'playing' && (
+                <div style={{ width: 60, height: 4, borderRadius: 2, background: 'var(--uno-border)', overflow: 'hidden' }}>
+                  <div style={{
+                    height: '100%',
+                    width: `${(timeLeft / room.turn_timeout) * 100}%`,
+                    background: timerDanger ? '#e74c3c' : isMyTurn ? 'var(--uno-accent)' : 'var(--uno-muted)',
+                    borderRadius: 2,
+                    transition: 'width 1s linear, background 0.3s',
+                  }} />
+                </div>
+              )}
+              {room.status === 'playing' && (
+                <span className="text-xs" style={{ color: timerDanger ? '#e74c3c' : 'var(--uno-muted)' }}>
+                  {timeLeft}с
+                </span>
+              )}
             </div>
           </>
         )}
       </div>
 
-      {/* Error */}
       {error && (
         <div className="mx-4 mb-2 text-center text-sm px-3 py-2 rounded-lg"
           style={{ background: 'rgba(231,76,60,0.12)', border: '1px solid rgba(231,76,60,0.3)', color: '#e74c3c' }}>
@@ -256,7 +296,7 @@ export default function UnoTable({ roomCode, roomId, userId, isHost }: UnoTableP
                 </span>
               </div>
             ))}
-            {hand.length === 0 && room.status === 'playing' && (
+            {hand.length === 0 && (
               <div className="flex items-center justify-center w-full text-2xl font-black" style={{ color: 'var(--uno-accent)' }}>
                 UNO! 🎉
               </div>

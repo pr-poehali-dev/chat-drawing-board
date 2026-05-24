@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import AuthScreen from '@/components/AuthScreen';
-import Lobby from '@/components/Lobby';
 import UnoTable from '@/components/UnoTable';
 import DrawingCanvas from '@/components/DrawingCanvas';
 import GameChat from '@/components/GameChat';
@@ -13,45 +12,57 @@ interface User {
   token: string;
 }
 
-interface Room {
-  code: string;
-  id: number;
-  isHost: boolean;
-}
-
 export default function Index() {
   const [user, setUser] = useState<User | null>(null);
-  const [room, setRoom] = useState<Room | null>(null);
+  const [roomId, setRoomId] = useState<number | null>(null);
   const [authChecked, setAuthChecked] = useState(false);
   const [topH, setTopH] = useState(58);
   const isDragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Auto-login
   useEffect(() => {
     const token = localStorage.getItem('uno_token');
     if (!token) { setAuthChecked(true); return; }
-    api.auth.me().then((data) => {
-      setUser({ ...data, token });
-      setAuthChecked(true);
-    }).catch(() => {
-      localStorage.removeItem('uno_token');
-      setAuthChecked(true);
-    });
+    api.auth.me()
+      .then((data) => { setUser({ ...data, token }); setAuthChecked(true); })
+      .catch(() => { localStorage.removeItem('uno_token'); setAuthChecked(true); });
   }, []);
+
+  // После авторизации — сразу join в единую комнату
+  useEffect(() => {
+    if (!user) return;
+    api.room.join().then(data => setRoomId(data.room_id)).catch(() => {});
+  }, [user]);
+
+  // Ping каждые 5 сек + leave при уходе
+  useEffect(() => {
+    if (!user || !roomId) return;
+    pingRef.current = setInterval(() => {
+      api.room.ping().catch(() => {});
+    }, 5000);
+
+    const handleLeave = () => { api.room.leave().catch(() => {}); };
+    window.addEventListener('beforeunload', handleLeave);
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') handleLeave();
+    });
+
+    return () => {
+      if (pingRef.current) clearInterval(pingRef.current);
+      window.removeEventListener('beforeunload', handleLeave);
+      handleLeave();
+    };
+  }, [user, roomId]);
 
   function handleAuth(u: User) { setUser(u); }
 
-  function handleEnterRoom(code: string, id: number) {
-    setRoom({ code, id, isHost: true });
-    api.room.state(code).then(state => {
-      setRoom({ code, id, isHost: state.host === user?.username });
-    }).catch(() => {});
-  }
-
   function handleLogout() {
+    api.room.leave().catch(() => {});
     localStorage.removeItem('uno_token');
     setUser(null);
-    setRoom(null);
+    setRoomId(null);
   }
 
   const startDrag = (e: React.MouseEvent) => {
@@ -60,8 +71,7 @@ export default function Index() {
     const onMove = (ev: MouseEvent) => {
       if (!isDragging.current || !containerRef.current) return;
       const rect = containerRef.current.getBoundingClientRect();
-      const pct = ((ev.clientY - rect.top) / rect.height) * 100;
-      setTopH(Math.min(80, Math.max(25, pct)));
+      setTopH(Math.min(80, Math.max(25, ((ev.clientY - rect.top) / rect.height) * 100)));
     };
     const onUp = () => {
       isDragging.current = false;
@@ -82,7 +92,15 @@ export default function Index() {
   }
 
   if (!user) return <AuthScreen onAuth={handleAuth} />;
-  if (!room) return <Lobby user={user} onEnterRoom={handleEnterRoom} onLogout={handleLogout} />;
+
+  if (!roomId) {
+    return (
+      <div className="flex items-center justify-center h-screen w-screen"
+        style={{ background: 'var(--uno-dark)', color: 'var(--uno-muted)', fontFamily: "'Golos Text', sans-serif" }}>
+        Подключение к игре...
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden"
@@ -90,12 +108,11 @@ export default function Index() {
       <div ref={containerRef} className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
         <div style={{ height: `${topH}%`, minHeight: 0, overflow: 'hidden' }}>
           <UnoTable
-            roomCode={room.code}
-            roomId={room.id}
+            roomId={roomId}
             userId={user.id}
             username={user.username}
             avatar={user.avatar}
-            isHost={room.isHost}
+            onLogout={handleLogout}
           />
         </div>
 
@@ -118,7 +135,7 @@ export default function Index() {
 
       <div style={{ width: 300, flexShrink: 0 }}>
         <GameChat
-          roomId={room.id}
+          roomId={roomId}
           userId={user.id}
           username={user.username}
           avatar={user.avatar}

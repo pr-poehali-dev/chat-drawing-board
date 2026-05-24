@@ -1,12 +1,12 @@
 {
   "tests": [
     {
-      "name": "State without code",
+      "name": "State of global room",
       "method": "POST",
       "path": "/",
       "body": {"action": "state"},
-      "expectedStatus": 400,
-      "expectedBody": {"error": "string"},
+      "expectedStatus": 200,
+      "expectedBody": {"code": "GLOBAL"},
       "bodyMatcher": "partial"
     }
   ]

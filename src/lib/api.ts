@@ -32,10 +32,11 @@ export const api = {
     me: () => post('auth', { action: 'me' }),
   },
   room: {
-    create: () => post('room', { action: 'create' }),
-    join: (code: string) => post('room', { action: 'join', code }),
+    join: () => post('room', { action: 'join' }),
+    leave: () => post('room', { action: 'leave' }),
+    ping: () => post('room', { action: 'ping' }),
     start: (room_id: number) => post('room', { action: 'start', room_id }),
-    state: (code: string) => post('room', { action: 'state', code }),
+    state: () => post('room', { action: 'state' }),
   },
   game: {
     hand: (room_id: number) => post('game', { action: 'hand', room_id }),
