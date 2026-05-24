@@ -1,18 +1,19 @@
 {
   "tests": [
     {
-      "name": "Register user",
+      "name": "Register new user",
       "method": "POST",
-      "path": "/register",
-      "body": {"username": "testplayer", "password": "pass1234", "avatar": "🦊"},
+      "path": "/",
+      "body": {"action": "register", "username": "testplayer99", "password": "pass1234", "avatar": "🦊"},
       "expectedStatus": 200,
       "expectedBody": {"token": "string"},
       "bodyMatcher": "partial"
     },
     {
-      "name": "Check me without token",
-      "method": "GET",
-      "path": "/me",
+      "name": "Login with wrong password",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "login", "username": "testplayer99", "password": "wrong"},
       "expectedStatus": 401,
       "expectedBody": {"error": "string"},
       "bodyMatcher": "partial"

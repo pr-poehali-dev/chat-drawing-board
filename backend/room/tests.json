@@ -1,9 +1,10 @@
 {
   "tests": [
     {
-      "name": "Get state without code",
-      "method": "GET",
-      "path": "/state",
+      "name": "State without code",
+      "method": "POST",
+      "path": "/",
+      "body": {"action": "state"},
       "expectedStatus": 400,
       "expectedBody": {"error": "string"},
       "bodyMatcher": "partial"

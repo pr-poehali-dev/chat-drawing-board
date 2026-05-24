@@ -1,8 +1,8 @@
 """
 Регистрация, вход и проверка сессии.
-POST /register — {username, password, avatar}
-POST /login    — {username, password}
-GET  /me       — проверка токена (X-Auth-Token)
+action=register — {username, password, avatar}
+action=login    — {username, password}
+action=me       — проверка токена (X-Auth-Token)
 """
 import os, json, hashlib, secrets
 import psycopg2
@@ -30,16 +30,16 @@ def handler(event: dict, context) -> dict:
     if event.get('httpMethod') == 'OPTIONS':
         return {'statusCode': 200, 'headers': CORS, 'body': ''}
 
-    method = event.get('httpMethod', 'GET')
-    path = event.get('path', '/')
+    params = event.get('queryStringParameters') or {}
+    body = json.loads(event.get('body') or '{}')
+    action = body.get('action') or params.get('action', '')
+    token = (event.get('headers') or {}).get('X-Auth-Token', '')
 
     conn = get_conn()
     cur = conn.cursor()
 
     try:
-        # GET /me — проверка токена
-        if method == 'GET' and '/me' in path:
-            token = event.get('headers', {}).get('X-Auth-Token', '')
+        if action == 'me':
             if not token:
                 return err('Нет токена', 401)
             cur.execute(
@@ -52,10 +52,7 @@ def handler(event: dict, context) -> dict:
                 return err('Сессия не найдена', 401)
             return ok({'id': row[0], 'username': row[1], 'avatar': row[2]})
 
-        body = json.loads(event.get('body') or '{}')
-
-        # POST /register
-        if method == 'POST' and '/register' in path:
+        if action == 'register':
             username = (body.get('username') or '').strip()
             password = body.get('password', '')
             avatar = body.get('avatar', '😎')
@@ -76,8 +73,7 @@ def handler(event: dict, context) -> dict:
             conn.commit()
             return ok({'token': token, 'id': user_id, 'username': username, 'avatar': avatar})
 
-        # POST /login
-        if method == 'POST' and '/login' in path:
+        if action == 'login':
             username = (body.get('username') or '').strip()
             password = body.get('password', '')
             cur.execute(
@@ -92,7 +88,7 @@ def handler(event: dict, context) -> dict:
             conn.commit()
             return ok({'token': token, 'id': row[0], 'username': username, 'avatar': row[1]})
 
-        return err('Не найдено', 404)
+        return err('Неизвестное действие', 400)
     finally:
         cur.close()
         conn.close()

@@ -9,15 +9,14 @@ function getToken() {
   return localStorage.getItem('uno_token') || '';
 }
 
-async function req(fn: keyof typeof URLS, method: string, path: string, body?: object) {
-  const url = URLS[fn] + path;
-  const res = await fetch(url, {
-    method,
+async function post(fn: keyof typeof URLS, body: object) {
+  const res = await fetch(URLS[fn], {
+    method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'X-Auth-Token': getToken(),
     },
-    body: body ? JSON.stringify(body) : undefined,
+    body: JSON.stringify(body),
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || 'Ошибка');
@@ -27,26 +26,26 @@ async function req(fn: keyof typeof URLS, method: string, path: string, body?: o
 export const api = {
   auth: {
     register: (username: string, password: string, avatar: string) =>
-      req('auth', 'POST', '/register', { username, password, avatar }),
+      post('auth', { action: 'register', username, password, avatar }),
     login: (username: string, password: string) =>
-      req('auth', 'POST', '/login', { username, password }),
-    me: () => req('auth', 'GET', '/me', undefined),
+      post('auth', { action: 'login', username, password }),
+    me: () => post('auth', { action: 'me' }),
   },
   room: {
-    create: () => req('room', 'POST', '/create', {}),
-    join: (code: string) => req('room', 'POST', '/join', { code }),
-    start: (room_id: number) => req('room', 'POST', '/start', { room_id }),
-    state: (code: string) => req('room', 'GET', `/state?code=${code}`, undefined),
+    create: () => post('room', { action: 'create' }),
+    join: (code: string) => post('room', { action: 'join', code }),
+    start: (room_id: number) => post('room', { action: 'start', room_id }),
+    state: (code: string) => post('room', { action: 'state', code }),
   },
   game: {
-    hand: (room_id: number) => req('game', 'GET', `/hand?room_id=${room_id}`, undefined),
-    play: (room_id: number, card: object) => req('game', 'POST', '/play', { room_id, card }),
-    draw: (room_id: number) => req('game', 'POST', '/draw', { room_id }),
+    hand: (room_id: number) => post('game', { action: 'hand', room_id }),
+    play: (room_id: number, card: object) => post('game', { action: 'play', room_id, card }),
+    draw: (room_id: number) => post('game', { action: 'draw', room_id }),
   },
   chat: {
     poll: (room_id: number, after: number) =>
-      req('chat', 'GET', `/poll?room_id=${room_id}&after=${after}`, undefined),
+      post('chat', { action: 'poll', room_id, after }),
     send: (room_id: number, text: string) =>
-      req('chat', 'POST', '/send', { room_id, text }),
+      post('chat', { action: 'send', room_id, text }),
   },
 };

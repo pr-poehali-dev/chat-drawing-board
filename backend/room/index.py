@@ -1,9 +1,9 @@
 """
-Управление комнатами: создать, войти, список игроков.
-POST /create   — создать комнату (X-Auth-Token)
-POST /join     — {code} войти по коду
-GET  /state    — состояние комнаты ?code=XXX
-POST /leave    — покинуть комнату
+Управление комнатами через action в теле или query.
+action=create  — создать комнату
+action=join    — {code} войти по коду
+action=state   — ?code=XXX состояние комнаты
+action=start   — {room_id} начать игру
 """
 import os, json, random, string
 import psycopg2
@@ -14,7 +14,6 @@ CORS = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, X-Auth-Token',
 }
-AVATARS = ['🦊','🦋','🐺','🐸','🦁','🐼','🦄','🐯']
 COLORS = ['red','blue','green','yellow']
 VALUES = ['0','1','2','3','4','5','6','7','8','9','+2','⬚','↩']
 
@@ -49,17 +48,16 @@ def make_deck():
     return deck
 
 def deal(deck, n=7):
-    hand = deck[:n]
-    rest = deck[n:]
-    return hand, rest
+    return deck[:n], deck[n:]
 
 def handler(event: dict, context) -> dict:
     if event.get('httpMethod') == 'OPTIONS':
         return {'statusCode': 200, 'headers': CORS, 'body': ''}
 
-    method = event.get('httpMethod', 'GET')
-    path = event.get('path', '/')
-    token = event.get('headers', {}).get('X-Auth-Token', '')
+    params = event.get('queryStringParameters') or {}
+    body = json.loads(event.get('body') or '{}')
+    action = body.get('action') or params.get('action', '')
+    token = (event.get('headers') or {}).get('X-Auth-Token', '')
 
     conn = get_conn()
     cur = conn.cursor()
@@ -67,9 +65,8 @@ def handler(event: dict, context) -> dict:
     try:
         user = get_user(cur, token) if token else None
 
-        # GET /state?code=XXX — открыто без авторизации
-        if method == 'GET' and '/state' in path:
-            code = (event.get('queryStringParameters') or {}).get('code', '')
+        if action == 'state':
+            code = body.get('code') or params.get('code', '')
             if not code:
                 return err('Нет кода комнаты')
             cur.execute(
@@ -91,13 +88,9 @@ def handler(event: dict, context) -> dict:
             )
             players = cur.fetchall()
             return ok({
-                'id': room_id,
-                'code': room[1],
-                'status': room[2],
-                'direction': room[3],
-                'current_turn': room[4],
-                'discard_top': room[5],
-                'host': room[6],
+                'id': room_id, 'code': room[1], 'status': room[2],
+                'direction': room[3], 'current_turn': room[4],
+                'discard_top': room[5], 'host': room[6],
                 'players': [
                     {'id': p[0], 'username': p[1], 'avatar': p[2],
                      'card_count': len(p[3]) if p[3] else 0, 'seat': p[4]}
@@ -107,16 +100,13 @@ def handler(event: dict, context) -> dict:
 
         if not user:
             return err('Требуется авторизация', 401)
-
         user_id, username, avatar = user
 
-        # POST /create
-        if method == 'POST' and '/create' in path:
+        if action == 'create':
             code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
             deck = make_deck()
             hand, deck_rest = deal(deck)
             top = deck_rest.pop(0)
-            # Ensure top card is a color card
             while top['color'] == 'wild':
                 deck_rest.append(top)
                 top = deck_rest.pop(0)
@@ -133,9 +123,7 @@ def handler(event: dict, context) -> dict:
             conn.commit()
             return ok({'code': code, 'room_id': room_id})
 
-        # POST /join
-        if method == 'POST' and '/join' in path:
-            body = json.loads(event.get('body') or '{}')
+        if action == 'join':
             code = body.get('code', '').upper().strip()
             cur.execute(f"SELECT id, status, deck FROM {SCHEMA}.rooms WHERE code = %s", (code,))
             room = cur.fetchone()
@@ -167,9 +155,7 @@ def handler(event: dict, context) -> dict:
             conn.commit()
             return ok({'code': code, 'room_id': room_id})
 
-        # POST /start
-        if method == 'POST' and '/start' in path:
-            body = json.loads(event.get('body') or '{}')
+        if action == 'start':
             room_id = body.get('room_id')
             cur.execute(f"SELECT host_id FROM {SCHEMA}.rooms WHERE id = %s", (room_id,))
             r = cur.fetchone()
@@ -179,7 +165,7 @@ def handler(event: dict, context) -> dict:
             conn.commit()
             return ok({'started': True})
 
-        return err('Не найдено', 404)
+        return err('Неизвестное действие', 400)
     finally:
         cur.close()
         conn.close()

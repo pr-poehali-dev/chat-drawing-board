@@ -1,10 +1,10 @@
 """
-Игровые действия: сходить картой, взять карту, получить свою руку.
-POST /play  — {room_id, card}  сыграть карту
-POST /draw  — {room_id}        взять карту из колоды
-GET  /hand  — ?room_id=N       посмотреть свои карты
+Игровые действия через action.
+action=hand  — посмотреть свои карты (?room_id=N)
+action=draw  — {room_id} взять карту из колоды
+action=play  — {room_id, card} сыграть карту
 """
-import os, json, random
+import os, json
 import psycopg2
 
 SCHEMA = os.environ.get('MAIN_DB_SCHEMA', 't_p20297638_chat_drawing_board')
@@ -33,7 +33,7 @@ def get_user(cur, token):
 
 def next_turn(cur, room_id, current_user_id):
     cur.execute(
-        f"SELECT user_id, seat FROM {SCHEMA}.room_players WHERE room_id = %s ORDER BY seat",
+        f"SELECT user_id FROM {SCHEMA}.room_players WHERE room_id = %s ORDER BY seat",
         (room_id,)
     )
     players = cur.fetchall()
@@ -44,10 +44,9 @@ def next_turn(cur, room_id, current_user_id):
         return ids[0]
     idx = ids.index(current_user_id)
     step = 1 if direction == 'cw' else -1
-    next_idx = (idx + step) % len(ids)
-    return ids[next_idx]
+    return ids[(idx + step) % len(ids)]
 
-def add_system_msg(cur, room_id, text, msg_type='move'):
+def add_msg(cur, room_id, text, msg_type='move'):
     cur.execute(
         f"INSERT INTO {SCHEMA}.chat_messages (room_id, username, avatar, text, msg_type) "
         f"VALUES (%s, 'Система', '🎮', %s, %s)",
@@ -58,9 +57,10 @@ def handler(event: dict, context) -> dict:
     if event.get('httpMethod') == 'OPTIONS':
         return {'statusCode': 200, 'headers': CORS, 'body': ''}
 
-    method = event.get('httpMethod', 'GET')
-    path = event.get('path', '/')
-    token = event.get('headers', {}).get('X-Auth-Token', '')
+    params = event.get('queryStringParameters') or {}
+    body = json.loads(event.get('body') or '{}')
+    action = body.get('action') or params.get('action', '')
+    token = (event.get('headers') or {}).get('X-Auth-Token', '')
 
     conn = get_conn()
     cur = conn.cursor()
@@ -71,9 +71,8 @@ def handler(event: dict, context) -> dict:
             return err('Требуется авторизация', 401)
         user_id, username, avatar = user
 
-        # GET /hand?room_id=N
-        if method == 'GET' and '/hand' in path:
-            room_id = (event.get('queryStringParameters') or {}).get('room_id')
+        if action == 'hand':
+            room_id = body.get('room_id') or params.get('room_id')
             cur.execute(
                 f"SELECT hand FROM {SCHEMA}.room_players WHERE room_id = %s AND user_id = %s",
                 (room_id, user_id)
@@ -83,11 +82,9 @@ def handler(event: dict, context) -> dict:
                 return err('Не в комнате', 404)
             return ok({'hand': row[0] or []})
 
-        body = json.loads(event.get('body') or '{}')
         room_id = body.get('room_id')
 
-        # POST /draw
-        if method == 'POST' and '/draw' in path:
+        if action == 'draw':
             cur.execute(
                 f"SELECT deck, current_turn, status FROM {SCHEMA}.rooms WHERE id = %s",
                 (room_id,)
@@ -117,12 +114,11 @@ def handler(event: dict, context) -> dict:
                 f"UPDATE {SCHEMA}.rooms SET deck = %s::jsonb, current_turn = %s WHERE id = %s",
                 (json.dumps(deck), next_turn(cur, room_id, user_id), room_id)
             )
-            add_system_msg(cur, room_id, f'{avatar} {username} взял карту из колоды', 'draw')
+            add_msg(cur, room_id, f'{avatar} {username} взял карту из колоды', 'draw')
             conn.commit()
             return ok({'drew': card})
 
-        # POST /play
-        if method == 'POST' and '/play' in path:
+        if action == 'play':
             card = body.get('card')
             if not card:
                 return err('Не указана карта')
@@ -138,7 +134,6 @@ def handler(event: dict, context) -> dict:
             if room[1] != user_id:
                 return err('Не твой ход')
             top = room[0] or {}
-            # Validate card
             if card['color'] != 'wild' and card['color'] != top.get('color') and card['value'] != top.get('value'):
                 return err('Карту нельзя положить на эту карту')
             cur.execute(
@@ -146,7 +141,6 @@ def handler(event: dict, context) -> dict:
                 (room_id, user_id)
             )
             hand = list(cur.fetchone()[0] or [])
-            # Remove card from hand
             removed = False
             for i, c in enumerate(hand):
                 if c.get('color') == card['color'] and c.get('value') == card['value']:
@@ -158,10 +152,8 @@ def handler(event: dict, context) -> dict:
 
             direction = room[2]
             deck = list(room[4]) if room[4] else []
-
-            # Special cards
-            penalty_user = None
             skip_turn = False
+
             if card['value'] == '↩':
                 direction = 'ccw' if direction == 'cw' else 'cw'
             elif card['value'] == '⬚':
@@ -172,7 +164,7 @@ def handler(event: dict, context) -> dict:
                     f"SELECT hand FROM {SCHEMA}.room_players WHERE room_id = %s AND user_id = %s",
                     (room_id, nt)
                 )
-                row = nt_hand = list((cur.fetchone() or ([],))[0] or [])
+                nt_hand = list((cur.fetchone() or ([],))[0] or [])
                 count = 2 if card['value'] == '+2' else 4
                 for _ in range(count):
                     if deck:
@@ -181,7 +173,6 @@ def handler(event: dict, context) -> dict:
                     f"UPDATE {SCHEMA}.room_players SET hand = %s::jsonb WHERE room_id = %s AND user_id = %s",
                     (json.dumps(nt_hand), room_id, nt)
                 )
-                penalty_user = nt
                 skip_turn = True
 
             cur.execute(
@@ -192,7 +183,8 @@ def handler(event: dict, context) -> dict:
             if skip_turn:
                 nt = next_turn(cur, room_id, nt)
             cur.execute(
-                f"UPDATE {SCHEMA}.rooms SET discard_top = %s::jsonb, current_turn = %s, direction = %s, deck = %s::jsonb WHERE id = %s",
+                f"UPDATE {SCHEMA}.rooms SET discard_top = %s::jsonb, current_turn = %s, "
+                f"direction = %s, deck = %s::jsonb WHERE id = %s",
                 (json.dumps(card), nt, direction, json.dumps(deck), room_id)
             )
             msg = f'{avatar} {username} положил {card["value"]} ({card["color"]})'
@@ -201,11 +193,11 @@ def handler(event: dict, context) -> dict:
             if len(hand) == 0:
                 msg = f'🎉 {avatar} {username} выиграл!'
                 cur.execute(f"UPDATE {SCHEMA}.rooms SET status = 'finished' WHERE id = %s", (room_id,))
-            add_system_msg(cur, room_id, msg, 'move')
+            add_msg(cur, room_id, msg, 'move')
             conn.commit()
             return ok({'played': card, 'cards_left': len(hand)})
 
-        return err('Не найдено', 404)
+        return err('Неизвестное действие', 400)
     finally:
         cur.close()
         conn.close()
