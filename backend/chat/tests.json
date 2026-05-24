@@ -1,0 +1,12 @@
+{
+  "tests": [
+    {
+      "name": "Poll without room_id",
+      "method": "GET",
+      "path": "/poll",
+      "expectedStatus": 400,
+      "expectedBody": {"error": "string"},
+      "bodyMatcher": "partial"
+    }
+  ]
+}

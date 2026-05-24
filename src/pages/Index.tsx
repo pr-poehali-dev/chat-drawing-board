@@ -1,17 +1,58 @@
-import { useState, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
+import AuthScreen from '@/components/AuthScreen';
+import Lobby from '@/components/Lobby';
 import UnoTable from '@/components/UnoTable';
 import DrawingCanvas from '@/components/DrawingCanvas';
 import GameChat from '@/components/GameChat';
+import { api } from '@/lib/api';
+
+interface User {
+  id: number;
+  username: string;
+  avatar: string;
+  token: string;
+}
+
+interface Room {
+  code: string;
+  id: number;
+  isHost: boolean;
+}
 
 export default function Index() {
-  const [actions, setActions] = useState<{ text: string; type: 'move' | 'uno' | 'draw' }[]>([]);
+  const [user, setUser] = useState<User | null>(null);
+  const [room, setRoom] = useState<Room | null>(null);
+  const [authChecked, setAuthChecked] = useState(false);
   const [topH, setTopH] = useState(58);
   const isDragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  const handleAction = useCallback((text: string, type: 'move' | 'uno' | 'draw' = 'move') => {
-    setActions(prev => [...prev, { text, type }]);
+  useEffect(() => {
+    const token = localStorage.getItem('uno_token');
+    if (!token) { setAuthChecked(true); return; }
+    api.auth.me().then((data) => {
+      setUser({ ...data, token });
+      setAuthChecked(true);
+    }).catch(() => {
+      localStorage.removeItem('uno_token');
+      setAuthChecked(true);
+    });
   }, []);
+
+  function handleAuth(u: User) { setUser(u); }
+
+  function handleEnterRoom(code: string, id: number) {
+    setRoom({ code, id, isHost: true });
+    api.room.state(code).then(state => {
+      setRoom({ code, id, isHost: state.host === user?.username });
+    }).catch(() => {});
+  }
+
+  function handleLogout() {
+    localStorage.removeItem('uno_token');
+    setUser(null);
+    setRoom(null);
+  }
 
   const startDrag = (e: React.MouseEvent) => {
     e.preventDefault();
@@ -31,44 +72,57 @@ export default function Index() {
     window.addEventListener('mouseup', onUp);
   };
 
+  if (!authChecked) {
+    return (
+      <div className="flex items-center justify-center h-screen w-screen"
+        style={{ background: 'var(--uno-dark)', color: 'var(--uno-muted)', fontFamily: "'Golos Text', sans-serif" }}>
+        Загрузка...
+      </div>
+    );
+  }
+
+  if (!user) return <AuthScreen onAuth={handleAuth} />;
+  if (!room) return <Lobby user={user} onEnterRoom={handleEnterRoom} onLogout={handleLogout} />;
+
   return (
-    <div className="flex h-screen w-screen overflow-hidden" style={{ background: 'var(--uno-dark)', fontFamily: "'Golos Text', sans-serif" }}>
-      {/* Left: Uno + Drawing */}
+    <div className="flex h-screen w-screen overflow-hidden"
+      style={{ background: 'var(--uno-dark)', fontFamily: "'Golos Text', sans-serif" }}>
       <div ref={containerRef} className="flex flex-col" style={{ flex: 1, minWidth: 0 }}>
-        {/* UNO Table */}
         <div style={{ height: `${topH}%`, minHeight: 0, overflow: 'hidden' }}>
-          <UnoTable onAction={handleAction} />
+          <UnoTable
+            roomCode={room.code}
+            roomId={room.id}
+            userId={user.id}
+            username={user.username}
+            avatar={user.avatar}
+            isHost={room.isHost}
+          />
         </div>
 
-        {/* Resize divider */}
-        <div
-          onMouseDown={startDrag}
+        <div onMouseDown={startDrag}
           style={{
-            height: 6,
-            cursor: 'row-resize',
+            height: 6, cursor: 'row-resize', flexShrink: 0,
             background: 'var(--uno-border)',
-            flexShrink: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
             userSelect: 'none',
-            transition: 'background 0.15s',
           }}
           onMouseEnter={e => (e.currentTarget.style.background = 'var(--uno-muted)')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'var(--uno-border)')}
-        >
-          <div style={{ width: 40, height: 3, borderRadius: 2, background: 'var(--uno-muted)', opacity: 0.6 }} />
+          onMouseLeave={e => (e.currentTarget.style.background = 'var(--uno-border)')}>
+          <div style={{ width: 40, height: 3, borderRadius: 2, background: 'var(--uno-muted)', opacity: 0.5 }} />
         </div>
 
-        {/* Drawing Canvas */}
         <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
           <DrawingCanvas />
         </div>
       </div>
 
-      {/* Right: Chat */}
       <div style={{ width: 300, flexShrink: 0 }}>
-        <GameChat externalMessages={actions} />
+        <GameChat
+          roomId={room.id}
+          userId={user.id}
+          username={user.username}
+          avatar={user.avatar}
+        />
       </div>
     </div>
   );
